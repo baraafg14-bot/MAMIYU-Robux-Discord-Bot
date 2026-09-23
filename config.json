@@ -1,0 +1,34 @@
+{
+  "storeName": "MAMIYU STORE",
+  "supportWhatsapp": "+62 823-3668-8127",
+  "currency": "IDR",
+  "prices": {
+    "10": 2000,
+    "25": 4000,
+    "50": 8000,
+    "100": 16000,
+    "200": 32000,
+    "300": 48000,
+    "400": 64000,
+    "500": 80000,
+    "600": 96000,
+    "700": 112000,
+    "800": 128000,
+    "900": 144000,
+    "1000": 160000
+  },
+  "paymentMethods": [
+    "OVO",
+    "GOPAY",
+    "DANA",
+    "BANK TRANSFER"
+  ],
+  "paymentAccounts": {
+    "OVO": "ISI NOMOR OVO DI SINI",
+    "GOPAY": "ISI NOMOR GOPAY DI SINI",
+    "DANA": "ISI NOMOR DANA DI SINI",
+    "BANK TRANSFER": "ISI NAMA BANK + NOMOR REKENING DI SINI"
+  },
+  "channels": {},
+  "roles": {}
+}
