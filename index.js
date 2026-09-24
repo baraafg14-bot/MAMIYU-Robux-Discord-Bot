@@ -352,6 +352,33 @@ client.on("interactionCreate", async (interaction) => {
     if (interaction.isButton() && interaction.customId.startsWith("paid_")) {
       const orderId = interaction.customId.replace("paid_", "");
 
+      // Mengirim embed notifikasi pembayaran ke channel order agar staff bisa melihat
+      const staffEmbed = new EmbedBuilder()
+        .setTitle(`💳 PAYMENT CLAIMED • ${orderId}`)
+        .setDescription(`Customer <@${interaction.user.id}> telah mengonfirmasi pembayaran.\n\nMohon segera dicek mutasi/pembayarannya oleh Staff!`)
+        .setColor(0x00ff00)
+        .setTimestamp();
+
+      // Tombol khusus staff untuk menyelesaikan atau menutup order
+      const staffActionRow = new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+          .setCustomId(`complete_${orderId}`)
+          .setLabel("SELESAIKAN ORDER")
+          .setEmoji("🎉")
+          .setStyle(ButtonStyle.Success),
+        new ButtonBuilder()
+          .setCustomId(`close_${orderId}`)
+          .setLabel("TUTUP ORDER")
+          .setEmoji("🔒")
+          .setStyle(ButtonStyle.Secondary)
+      );
+
+      await interaction.channel.send({
+        content: `<@&${config.roles.staff}> 🔔 Ada konfirmasi pembayaran baru!`,
+        embeds: [staffEmbed],
+        components: [staffActionRow]
+      });
+
       await sendLog(
         interaction.guild,
         "💳 PAYMENT CLAIMED",
@@ -360,7 +387,25 @@ client.on("interactionCreate", async (interaction) => {
 
       return interaction.reply({
         content: `✅ Notifikasi pembayaran untuk **${orderId}** telah dikirim ke staff. Silakan tunggu verifikasi.`,
+        flags: MessageFlags.Ephemeral
       });
+    }
+
+    if (interaction.isButton() && interaction.customId.startsWith("complete_")) {
+      const orderId = interaction.customId.replace("complete_", "");
+      
+      await interaction.reply("🎉 Order telah diselesaikan oleh Staff. Channel akan ditutup dalam 5 detik.");
+      
+      await sendLog(
+        interaction.guild,
+        "✅ ORDER COMPLETED",
+        `**Order:** ${orderId}\n**Processed by:** <@${interaction.user.id}>`
+      );
+
+      setTimeout(async () => {
+        await interaction.channel.delete(`Completed order ${orderId}`).catch(() => {});
+      }, 5000);
+      return;
     }
 
     if (interaction.isButton() && interaction.customId.startsWith("close_")) {
@@ -371,13 +416,3 @@ client.on("interactionCreate", async (interaction) => {
       }, 5000);
       return;
     }
-
-  } catch (err) {
-    console.error(err);
-    if (!interaction.replied && !interaction.deferred) {
-      await interaction.reply({ content: "❌ Terjadi error. Cek console bot.", ephemeral: true }).catch(() => {});
-    }
-  }
-});
-
-client.login(process.env.DISCORD_TOKEN);
