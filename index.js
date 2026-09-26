@@ -21,10 +21,6 @@ const config = JSON.parse(
   fs.readFileSync("./config.json", "utf8")
 );
 
-// ================================
-// CLIENT
-// ================================
-
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
@@ -32,29 +28,29 @@ const client = new Client({
   ]
 });
 
-// ================================
+// =========================
 // HELPER
-// ================================
+// =========================
 
 function money(number) {
   return new Intl.NumberFormat("id-ID").format(Number(number));
 }
 
-function makeId() {
+function makeOrderId() {
   return (
     "RBX-" +
-    Math.random().toString(36).slice(2, 7).toUpperCase() +
+    Math.random().toString(36).substring(2, 7).toUpperCase() +
     "-" +
     Date.now().toString().slice(-4)
   );
 }
 
-function staffOnly(member) {
+function isStaff(member) {
+  if (!member) return false;
+
   return (
-    member &&
-    config.roles &&
-    config.roles.staff &&
-    member.roles.cache.has(config.roles.staff)
+    member.permissions.has(PermissionFlagsBits.Administrator) ||
+    member.roles.cache.has(config.roles?.staff)
   );
 }
 
@@ -70,54 +66,118 @@ async function sendLog(guild, title, description, color = 0x8b2cff) {
 
     if (!channel) return;
 
+    const embed = new EmbedBuilder()
+      .setTitle(title)
+      .setDescription(description)
+      .setColor(color)
+      .setTimestamp();
+
     await channel.send({
-      embeds: [
-        new EmbedBuilder()
-          .setTitle(title)
-          .setDescription(description)
-          .setColor(color)
-          .setTimestamp()
-      ]
+      embeds: [embed]
     });
   } catch (error) {
-    console.error("Gagal mengirim log:", error);
+    console.error("LOG ERROR:", error);
   }
 }
 
 function getPrice(amount) {
   if (!config.prices) return null;
 
-  return config.prices[amount];
+  return config.prices[String(amount)];
 }
 
-// ================================
+function createAmountMenu() {
+  const options = Object.entries(config.prices || {})
+    .map(([robux, price]) => ({
+      label: `${money(robux)} Robux`,
+      description: `Rp ${money(price)}`,
+      value: String(robux)
+    }))
+    .slice(0, 25);
+
+  return new StringSelectMenuBuilder()
+    .setCustomId("robux_amount")
+    .setPlaceholder("Pilih nominal Robux...")
+    .addOptions(options);
+}
+
+// =========================
 // READY
-// ================================
+// =========================
 
 client.once("ready", () => {
-  console.log("--------------------------------");
-  console.log(`MAMIYU BOT ONLINE`);
-  console.log(`Login sebagai: ${client.user.tag}`);
-  console.log(`Bot ID: ${client.user.id}`);
-  console.log("--------------------------------");
+  console.log("================================");
+  console.log(`BOT ONLINE: ${client.user.tag}`);
+  console.log(`SERVER: ${client.guilds.cache.size}`);
+  console.log("================================");
 });
 
-// ================================
+// =========================
 // INTERACTION
-// ================================
+// =========================
 
 client.on("interactionCreate", async (interaction) => {
   try {
 
-    // ==================================================
+    // ==========================================
     // SLASH COMMAND
-    // ==================================================
+    // ==========================================
 
     if (interaction.isChatInputCommand()) {
 
-      // ============================
+      // =========================
+      // /price
+      // =========================
+
+      if (interaction.commandName === "price") {
+
+        const lines = Object.entries(config.prices || {})
+          .map(
+            ([robux, price]) =>
+              `**${money(robux)} RBX** → **Rp ${money(price)}**`
+          )
+          .join("\n");
+
+        return interaction.reply({
+          embeds: [
+            new EmbedBuilder()
+              .setTitle("💜 MAMIYU STORE — PRICE LIST")
+              .setDescription(lines || "Price list belum diatur.")
+              .setColor(0x8b2cff)
+              .setFooter({
+                text: "Via Username • MAMIYU STORE"
+              })
+          ]
+        });
+      }
+
+      // =========================
+      // /buy
+      // =========================
+
+      if (interaction.commandName === "buy") {
+
+        const menu = createAmountMenu();
+
+        return interaction.reply({
+          embeds: [
+            new EmbedBuilder()
+              .setTitle("💜 PILIH NOMINAL")
+              .setDescription(
+                "Pilih jumlah Robux yang ingin kamu beli."
+              )
+              .setColor(0x8b2cff)
+          ],
+          components: [
+            new ActionRowBuilder().addComponents(menu)
+          ],
+          ephemeral: true
+        });
+      }
+
+      // =========================
       // /setup
-      // ============================
+      // =========================
 
       if (interaction.commandName === "setup") {
 
@@ -127,7 +187,8 @@ client.on("interactionCreate", async (interaction) => {
           )
         ) {
           return interaction.reply({
-            content: "❌ Hanya administrator yang dapat menjalankan setup.",
+            content:
+              "❌ Hanya administrator yang dapat menjalankan setup.",
             ephemeral: true
           });
         }
@@ -138,10 +199,7 @@ client.on("interactionCreate", async (interaction) => {
 
         const guild = interaction.guild;
 
-        // ============================
         // STAFF ROLE
-        // ============================
-
         let staffRole = guild.roles.cache.find(
           role => role.name === "MAMIYU STAFF"
         );
@@ -154,12 +212,10 @@ client.on("interactionCreate", async (interaction) => {
           });
         }
 
+        config.roles = config.roles || {};
         config.roles.staff = staffRole.id;
 
-        // ============================
         // CATEGORY
-        // ============================
-
         async function findOrCreateCategory(name) {
 
           let category = guild.channels.cache.find(
@@ -178,105 +234,92 @@ client.on("interactionCreate", async (interaction) => {
           return category;
         }
 
-        // ============================
-        // TEXT CHANNEL
-        // ============================
-
-        async function findOrCreateText(
+        // CHANNEL
+        async function findOrCreateChannel(
           name,
-          parent,
-          options = {}
+          parent
         ) {
 
           let channel = guild.channels.cache.find(
-            c =>
-              c.type === ChannelType.GuildText &&
-              c.name === name
+            ch =>
+              ch.type === ChannelType.GuildText &&
+              ch.name === name
           );
 
           if (!channel) {
             channel = await guild.channels.create({
               name,
               type: ChannelType.GuildText,
-              parent,
-              ...options
+              parent
             });
           }
 
           return channel;
         }
 
-        // ============================
-        // CREATE CATEGORIES
-        // ============================
+        const info = await findOrCreateCategory(
+          "📌 INFORMATION"
+        );
 
-        const infoCategory =
-          await findOrCreateCategory("📌 INFORMATION");
+        const store = await findOrCreateCategory(
+          "🛒 ROBUX STORE"
+        );
 
-        const storeCategory =
-          await findOrCreateCategory("🛒 ROBUX STORE");
+        const orders = await findOrCreateCategory(
+          "🎫 ORDERS"
+        );
 
-        const ordersCategory =
-          await findOrCreateCategory("🎫 ORDERS");
-
-        const staffCategory =
-          await findOrCreateCategory("🔐 STAFF");
-
-        // ============================
-        // CREATE CHANNELS
-        // ============================
+        const staff = await findOrCreateCategory(
+          "🔐 STAFF"
+        );
 
         const announcement =
-          await findOrCreateText(
+          await findOrCreateChannel(
             "📢・announcement",
-            infoCategory
+            info
           );
 
         const rules =
-          await findOrCreateText(
+          await findOrCreateChannel(
             "📜・rules",
-            infoCategory
+            info
           );
 
         const priceList =
-          await findOrCreateText(
+          await findOrCreateChannel(
             "💰・price-list",
-            infoCategory
+            info
           );
 
         const createOrder =
-          await findOrCreateText(
+          await findOrCreateChannel(
             "🛍️・create-order",
-            storeCategory
+            store
           );
 
         const testimonials =
-          await findOrCreateText(
+          await findOrCreateChannel(
             "⭐・testimonials",
-            storeCategory
+            store
           );
 
         const orderLogs =
-          await findOrCreateText(
+          await findOrCreateChannel(
             "📋・order-logs",
-            staffCategory
+            staff
           );
 
         const paymentLogs =
-          await findOrCreateText(
+          await findOrCreateChannel(
             "💳・payment-logs",
-            staffCategory
+            staff
           );
 
         const staffChat =
-          await findOrCreateText(
+          await findOrCreateChannel(
             "🛠️・staff-chat",
-            staffCategory
+            staff
           );
-
-        // ============================
-        // SAVE CONFIG
-        // ============================
 
         config.channels = {
           announcement: announcement.id,
@@ -287,7 +330,7 @@ client.on("interactionCreate", async (interaction) => {
           orderLogs: orderLogs.id,
           paymentLogs: paymentLogs.id,
           staffChat: staffChat.id,
-          ordersCategory: ordersCategory.id
+          ordersCategory: orders.id
         };
 
         fs.writeFileSync(
@@ -295,183 +338,160 @@ client.on("interactionCreate", async (interaction) => {
           JSON.stringify(config, null, 2)
         );
 
-        // ============================
-        // PRICE EMBED
-        // ============================
+        // PRICE LIST
+        const priceLines = Object.entries(
+          config.prices || {}
+        )
+          .map(
+            ([robux, price]) =>
+              `**${money(robux)} RBX** → **Rp ${money(price)}**`
+          )
+          .join("\n");
 
-        const priceLines =
-          Object.entries(config.prices || {})
-            .map(
-              ([robux, price]) =>
-                `**${money(robux)} RBX** → **Rp ${money(price)}**`
-            )
-            .join("\n");
-
-        const priceEmbed =
-          new EmbedBuilder()
-            .setTitle("💜 MAMIYU STORE — PRICE LIST")
-            .setDescription(
-              "Harga Robux via Username Roblox."
-            )
-            .addFields({
-              name: "💎 DAFTAR HARGA",
-              value: priceLines.slice(0, 1024)
-            })
-            .setColor(0x8b2cff)
-            .setFooter({
-              text: "MAMIYU STORE • Via Username"
-            });
+        const priceEmbed = new EmbedBuilder()
+          .setTitle("💜 MAMIYU STORE — PRICE LIST")
+          .setDescription(priceLines)
+          .setColor(0x8b2cff)
+          .setFooter({
+            text: "Via Username • MAMIYU STORE"
+          });
 
         await priceList.send({
           embeds: [priceEmbed]
         });
 
-        // ============================
         // BUY BUTTON
-        // ============================
-
-        const buyEmbed =
-          new EmbedBuilder()
-            .setTitle("🛒 MAMIYU ROBUX STORE")
-            .setDescription(
-              "Butuh Robux?\n\n" +
-              "⚡ Proses cepat\n" +
-              "🔒 Aman & terpercaya\n" +
-              "💜 Pelayanan ramah\n\n" +
-              "Klik **BUY ROBUX** untuk membuat order."
-            )
-            .setColor(0x8b2cff);
+        const buyEmbed = new EmbedBuilder()
+          .setTitle("🛒 MAMIYU ROBUX STORE")
+          .setDescription(
+            "Butuh Robux?\n\n" +
+            "⚡ Proses cepat\n" +
+            "🔒 Aman\n" +
+            "💜 Pelayanan ramah\n\n" +
+            "Klik **BUY ROBUX** untuk mulai."
+          )
+          .setColor(0x8b2cff);
 
         const buyButton =
-          new ButtonBuilder()
-            .setCustomId("buy_robux")
-            .setLabel("BUY ROBUX")
-            .setEmoji("🛒")
-            .setStyle(ButtonStyle.Primary);
+          new ActionRowBuilder().addComponents(
+            new ButtonBuilder()
+              .setCustomId("buy_robux")
+              .setLabel("BUY ROBUX")
+              .setEmoji("🛒")
+              .setStyle(ButtonStyle.Primary)
+          );
 
         await createOrder.send({
           embeds: [buyEmbed],
-          components: [
-            new ActionRowBuilder().addComponents(
-              buyButton
-            )
-          ]
+          components: [buyButton]
         });
 
         return interaction.editReply(
-          "✅ Setup MAMIYU Store selesai."
+          "✅ Setup MAMIYU Store berhasil."
         );
-      }
-
-      // ============================
-      // /price
-      // ============================
-
-      if (interaction.commandName === "price") {
-
-        const lines =
-          Object.entries(config.prices || {})
-            .map(
-              ([robux, price]) =>
-                `**${money(robux)} RBX** → **Rp ${money(price)}**`
-            )
-            .join("\n");
-
-        return interaction.reply({
-          embeds: [
-            new EmbedBuilder()
-              .setTitle("💜 MAMIYU STORE — PRICE LIST")
-              .setDescription(lines)
-              .setColor(0x8b2cff)
-              .setFooter({
-                text: "Via Username • MAMIYU STORE"
-              })
-          ]
-        });
-      }
-
-      // ============================
-      // /buy
-      // ============================
-
-      if (interaction.commandName === "buy") {
-        return showAmountMenu(interaction);
       }
     }
 
-    // ==================================================
+    // ==========================================
     // BUY ROBUX BUTTON
-    // ==================================================
+    // ==========================================
 
     if (
       interaction.isButton() &&
       interaction.customId === "buy_robux"
     ) {
-      return showAmountMenu(interaction);
+
+      const menu = createAmountMenu();
+
+      return interaction.reply({
+        embeds: [
+          new EmbedBuilder()
+            .setTitle("💜 PILIH NOMINAL")
+            .setDescription(
+              "Pilih jumlah Robux yang ingin kamu order."
+            )
+            .setColor(0x8b2cff)
+        ],
+        components: [
+          new ActionRowBuilder().addComponents(menu)
+        ],
+        ephemeral: true
+      });
     }
 
-    // ==================================================
-    // NOMINAL ROBUX
-    // ==================================================
+    // ==========================================
+    // PILIH NOMINAL
+    // ==========================================
 
     if (
       interaction.isStringSelectMenu() &&
       interaction.customId === "robux_amount"
     ) {
 
-      const amount = interaction.values[0];
+      const amount = String(
+        interaction.values[0]
+      );
 
       const price = getPrice(amount);
 
-      if (price === null || price === undefined) {
+      if (!price) {
         return interaction.reply({
-          content: "❌ Nominal Robux tidak ditemukan.",
+          content:
+            "❌ Nominal tersebut tidak ditemukan di config.json.",
           ephemeral: true
         });
       }
 
       const modal =
         new ModalBuilder()
-          .setCustomId(`order_modal_${amount}`)
-          .setTitle("MAMIYU • Data Order");
+          .setCustomId(
+            `order_modal_${amount}`
+          )
+          .setTitle("MAMIYU • DATA ORDER");
 
-      const username =
+      const usernameInput =
         new TextInputBuilder()
           .setCustomId("roblox_username")
           .setLabel("Username Roblox")
-          .setPlaceholder("Masukkan username Roblox")
+          .setPlaceholder(
+            "Contoh: RobloxPlayer123"
+          )
           .setStyle(TextInputStyle.Short)
           .setRequired(true)
           .setMaxLength(30);
 
-      const notes =
+      const notesInput =
         new TextInputBuilder()
           .setCustomId("notes")
           .setLabel("Catatan (opsional)")
-          .setPlaceholder("Contoh: proses secepatnya")
+          .setPlaceholder(
+            "Contoh: proses secepatnya"
+          )
           .setStyle(TextInputStyle.Paragraph)
           .setRequired(false)
           .setMaxLength(300);
 
       modal.addComponents(
         new ActionRowBuilder().addComponents(
-          username
+          usernameInput
         ),
         new ActionRowBuilder().addComponents(
-          notes
+          notesInput
         )
       );
 
       return interaction.showModal(modal);
     }
 
-    // ==================================================
-    // ORDER MODAL
-    // ==================================================
+    // ==========================================
+    // SUBMIT MODAL
+    // ==========================================
 
     if (
       interaction.isModalSubmit() &&
-      interaction.customId.startsWith("order_modal_")
+      interaction.customId.startsWith(
+        "order_modal_"
+      )
     ) {
 
       const amount =
@@ -492,18 +512,19 @@ client.on("interactionCreate", async (interaction) => {
 
       const price = getPrice(amount);
 
-      if (price === null || price === undefined) {
+      if (!price) {
         return interaction.reply({
-          content: "❌ Harga produk tidak ditemukan.",
+          content:
+            "❌ Harga Robux tidak ditemukan.",
           ephemeral: true
         });
       }
 
-      const orderId = makeId();
+      const orderId = makeOrderId();
 
       const category =
         await interaction.guild.channels.fetch(
-          config.channels?.ordersCategory
+          config.channels.ordersCategory
         ).catch(() => null);
 
       if (!category) {
@@ -514,23 +535,34 @@ client.on("interactionCreate", async (interaction) => {
         });
       }
 
-      // ============================
-      // CREATE ORDER CHANNEL
-      // ============================
+      const staffRoleId =
+        config.roles?.staff;
 
-      const channel =
+      if (!staffRoleId) {
+        return interaction.reply({
+          content:
+            "❌ Role MAMIYU STAFF belum diatur. Jalankan `/setup`.",
+          ephemeral: true
+        });
+      }
+
+      // CREATE ORDER CHANNEL
+      const orderChannel =
         await interaction.guild.channels.create({
-          name: `order-${orderId.toLowerCase()}`,
+          name:
+            `order-${orderId.toLowerCase()}`,
           type: ChannelType.GuildText,
           parent: category.id,
 
           permissionOverwrites: [
             {
-              id: interaction.guild.roles.everyone.id,
+              id:
+                interaction.guild.roles.everyone.id,
               deny: [
                 PermissionFlagsBits.ViewChannel
               ]
             },
+
             {
               id: interaction.user.id,
               allow: [
@@ -540,8 +572,9 @@ client.on("interactionCreate", async (interaction) => {
                 PermissionFlagsBits.ReadMessageHistory
               ]
             },
+
             {
-              id: config.roles.staff,
+              id: staffRoleId,
               allow: [
                 PermissionFlagsBits.ViewChannel,
                 PermissionFlagsBits.SendMessages,
@@ -552,95 +585,64 @@ client.on("interactionCreate", async (interaction) => {
           ]
         });
 
-      // ============================
-      // SAVE ORDER DATA IN TOPIC
-      // ============================
-
-      await channel.setTopic(
-        JSON.stringify({
-          orderId,
-          customerId: interaction.user.id,
-          username,
-          amount,
-          price,
-          notes,
-          status: "WAITING PAYMENT"
-        })
-      ).catch(() => {});
-
-      // ============================
-      // PAYMENT BUTTONS
-      // ============================
-
-      const paymentMethods =
+      // PAYMENT METHODS
+      const methods =
         Array.isArray(config.paymentMethods)
           ? config.paymentMethods
-          : [];
+          : ["OVO", "GOPAY", "DANA", "BANK TRANSFER"];
 
       const paymentButtons =
-        paymentMethods.map((method, index) => {
+        new ActionRowBuilder();
 
-          const safeMethod =
-            String(method)
-              .replace(/\s+/g, "_")
-              .slice(0, 70);
+      methods
+        .slice(0, 5)
+        .forEach((method, index) => {
 
-          return new ButtonBuilder()
-            .setCustomId(
-              `pay_${orderId}_${safeMethod}`
-            )
-            .setLabel(String(method).slice(0, 80))
-            .setStyle(
-              index === 0
-                ? ButtonStyle.Primary
-                : ButtonStyle.Secondary
-            );
+          paymentButtons.addComponents(
+            new ButtonBuilder()
+              .setCustomId(
+                `pay_${orderId}_${index}`
+              )
+              .setLabel(String(method))
+              .setStyle(
+                index === 0
+                  ? ButtonStyle.Primary
+                  : ButtonStyle.Secondary
+              )
+          );
         });
-
-      // Discord maksimal 5 button dalam satu row
-      const rows = [];
-
-      for (
-        let i = 0;
-        i < paymentButtons.length;
-        i += 5
-      ) {
-        rows.push(
-          new ActionRowBuilder().addComponents(
-            paymentButtons.slice(i, i + 5)
-          )
-        );
-      }
-
-      // ============================
-      // ORDER EMBED
-      // ============================
 
       const orderEmbed =
         new EmbedBuilder()
-          .setTitle(`🛒 ORDER ${orderId}`)
+          .setTitle(
+            `🛒 ORDER ${orderId}`
+          )
           .setDescription(
             "Silakan pilih metode pembayaran di bawah."
           )
           .addFields(
             {
               name: "👤 Customer",
-              value: `<@${interaction.user.id}>`,
+              value:
+                `<@${interaction.user.id}>`,
               inline: true
             },
             {
               name: "🎮 Roblox Username",
-              value: `\`${username}\``,
+              value:
+                `\`${username}\``,
               inline: true
             },
             {
               name: "💎 Product",
-              value: `**${money(amount)} Robux**`,
+              value:
+                `**${money(amount)} Robux**`,
               inline: true
             },
             {
               name: "💰 Total",
-              value: `**Rp ${money(price)}**`,
+              value:
+                `**Rp ${money(price)}**`,
               inline: true
             },
             {
@@ -650,26 +652,27 @@ client.on("interactionCreate", async (interaction) => {
             },
             {
               name: "📌 Status",
-              value: "🟡 WAITING PAYMENT",
-              inline: true
+              value:
+                "🟡 WAITING PAYMENT",
+              inline: false
             }
           )
           .setColor(0x8b2cff)
           .setFooter({
             text:
-              "MAMIYU STORE • Jangan kirim password Roblox kepada siapa pun."
+              "MAMIYU STORE • Jangan pernah kirim password Roblox."
           });
 
-      await channel.send({
+      await orderChannel.send({
         content:
-          `<@${interaction.user.id}> <@&${config.roles.staff}>`,
-        embeds: [orderEmbed],
-        components: rows
-      });
+          `<@${interaction.user.id}> <@&${staffRoleId}>`,
 
-      // ============================
-      // LOG
-      // ============================
+        embeds: [orderEmbed],
+
+        components: [
+          paymentButtons
+        ]
+      });
 
       await sendLog(
         interaction.guild,
@@ -683,14 +686,14 @@ client.on("interactionCreate", async (interaction) => {
 
       return interaction.reply({
         content:
-          `✅ Order berhasil dibuat: <#${channel.id}>`,
+          `✅ Order berhasil dibuat!\n\n📦 Order: <#${orderChannel.id}>`,
         ephemeral: true
       });
     }
 
-    // ==================================================
-    // PAYMENT METHOD
-    // ==================================================
+    // ==========================================
+    // PILIH PAYMENT
+    // ==========================================
 
     if (
       interaction.isButton() &&
@@ -702,37 +705,39 @@ client.on("interactionCreate", async (interaction) => {
 
       const orderId = parts[1];
 
+      const methodIndex =
+        Number(parts[2]);
+
+      const methods =
+        Array.isArray(config.paymentMethods)
+          ? config.paymentMethods
+          : ["OVO", "GOPAY", "DANA", "BANK TRANSFER"];
+
       const method =
-        parts
-          .slice(2)
-          .join(" ");
+        methods[methodIndex] || methods[0];
 
       const account =
-        config.paymentAccounts?.[method];
+        config.paymentAccounts?.[method] ||
+        "Belum diatur admin.";
 
-      if (!account) {
-        return interaction.reply({
-          content:
-            "❌ Rekening/payment untuk metode ini belum diatur admin.",
-          ephemeral: true
-        });
-      }
-
-      const row =
+      const buttons =
         new ActionRowBuilder().addComponents(
 
           new ButtonBuilder()
-            .setCustomId(`paid_${orderId}`)
+            .setCustomId(
+              `paid_${orderId}`
+            )
             .setLabel("SAYA SUDAH BAYAR")
             .setEmoji("✅")
             .setStyle(ButtonStyle.Success),
 
           new ButtonBuilder()
-            .setCustomId(`close_${orderId}`)
+            .setCustomId(
+              `close_${orderId}`
+            )
             .setLabel("CANCEL ORDER")
             .setEmoji("❌")
             .setStyle(ButtonStyle.Danger)
-
         );
 
       return interaction.reply({
@@ -744,19 +749,18 @@ client.on("interactionCreate", async (interaction) => {
             .setDescription(
               `Silakan lakukan pembayaran ke:\n\n` +
               `**${account}**\n\n` +
-              `Setelah membayar, kirim bukti pembayaran ` +
-              `di channel order ini lalu tekan ` +
-              `**SAYA SUDAH BAYAR**.`
+              `Setelah membayar, kirim bukti pembayaran di channel order ini.\n\n` +
+              `Kemudian tekan **SAYA SUDAH BAYAR**.`
             )
             .setColor(0x8b2cff)
         ],
-        components: [row]
+        components: [buttons]
       });
     }
 
-    // ==================================================
-    // CUSTOMER CLAIM PAYMENT
-    // ==================================================
+    // ==========================================
+    // CUSTOMER SUDAH BAYAR
+    // ==========================================
 
     if (
       interaction.isButton() &&
@@ -769,68 +773,85 @@ client.on("interactionCreate", async (interaction) => {
           ""
         );
 
-      // ============================
-      // LOG
-      // ============================
-
       await sendLog(
         interaction.guild,
         "💳 PAYMENT CLAIMED",
         `**Order:** ${orderId}\n` +
-        `**Customer:** <@${interaction.user.id}>\n` +
-        `Customer menekan tombol **SAYA SUDAH BAYAR**.`,
+        `**Customer:** <@${interaction.user.id}>\n\n` +
+        `Customer menekan **SAYA SUDAH BAYAR**.`,
         0xffc107
       );
 
-      // ============================
-      // STAFF VERIFICATION BUTTON
-      // ============================
-
-      const verifyRow =
+      // STAFF VERIFICATION BUTTONS
+      const staffButtons =
         new ActionRowBuilder().addComponents(
 
           new ButtonBuilder()
-            .setCustomId(`verify_${orderId}`)
+            .setCustomId(
+              `verify_${orderId}`
+            )
             .setLabel("VERIFIKASI PEMBAYARAN")
+            .setEmoji("🔎")
+            .setStyle(ButtonStyle.Primary),
+
+          new ButtonBuilder()
+            .setCustomId(
+              `complete_${orderId}`
+            )
+            .setLabel("SELESAIKAN ORDER")
             .setEmoji("✅")
             .setStyle(ButtonStyle.Success),
 
           new ButtonBuilder()
-            .setCustomId(`reject_${orderId}`)
-            .setLabel("TOLAK PEMBAYARAN")
+            .setCustomId(
+              `reject_${orderId}`
+            )
+            .setLabel("TOLAK")
             .setEmoji("❌")
             .setStyle(ButtonStyle.Danger)
-
         );
 
       await interaction.channel.send({
         content:
-          `🔔 <@&${config.roles.staff}>\n` +
-          `Customer <@${interaction.user.id}> ` +
-          `mengklaim sudah melakukan pembayaran.\n\n` +
-          `Staff silakan periksa bukti pembayaran ` +
-          `sebelum melakukan verifikasi.`,
+          `<@&${config.roles.staff}> 📢 **PAYMENT CLAIMED**\n` +
+          `Customer: <@${interaction.user.id}>`,
 
-        components: [verifyRow]
+        embeds: [
+          new EmbedBuilder()
+            .setTitle(
+              `💳 VERIFIKASI PAYMENT • ${orderId}`
+            )
+            .setDescription(
+              "Customer mengaku sudah melakukan pembayaran.\n\n" +
+              "Staff silakan cek bukti pembayaran yang dikirim customer."
+            )
+            .setColor(0xffc107)
+        ],
+
+        components: [
+          staffButtons
+        ]
       });
 
       return interaction.reply({
         content:
-          "✅ Notifikasi pembayaran sudah dikirim ke staff. Silakan tunggu verifikasi.",
+          "✅ Pembayaran ditandai sebagai **SUDAH BAYAR**.\nStaff akan melakukan verifikasi.",
         ephemeral: true
       });
     }
 
-    // ==================================================
-    // STAFF VERIFY
-    // ==================================================
+    // ==========================================
+    // STAFF VERIFIKASI
+    // ==========================================
 
     if (
       interaction.isButton() &&
-      interaction.customId.startsWith("verify_")
+      interaction.customId.startsWith(
+        "verify_"
+      )
     ) {
 
-      if (!staffOnly(interaction.member)) {
+      if (!isStaff(interaction.member)) {
         return interaction.reply({
           content:
             "❌ Hanya MAMIYU STAFF yang dapat melakukan verifikasi.",
@@ -844,133 +865,106 @@ client.on("interactionCreate", async (interaction) => {
           ""
         );
 
-      // ============================
-      // GET ORDER DATA
-      // ============================
+      await sendLog(
+        interaction.guild,
+        "🔎 PAYMENT VERIFIED",
+        `**Order:** ${orderId}\n` +
+        `**Staff:** <@${interaction.user.id}>\n\n` +
+        `Pembayaran telah diverifikasi staff.`,
+        0x00c853
+      );
 
-      let orderData = {};
+      await interaction.channel.send({
+        embeds: [
+          new EmbedBuilder()
+            .setTitle(
+              "✅ PEMBAYARAN TERVERIFIKASI"
+            )
+            .setDescription(
+              `Order **${orderId}** telah diverifikasi oleh <@${interaction.user.id}>.\n\n` +
+              "Silakan lanjutkan proses pengiriman Robux."
+            )
+            .setColor(0x00c853)
+        ]
+      });
 
-      if (interaction.channel.topic) {
-        try {
-          orderData =
-            JSON.parse(
-              interaction.channel.topic
-            );
-        } catch {
-          orderData = {};
-        }
+      return interaction.reply({
+        content:
+          "✅ Pembayaran berhasil diverifikasi.",
+        ephemeral: true
+      });
+    }
+
+    // ==========================================
+    // COMPLETE ORDER
+    // ==========================================
+
+    if (
+      interaction.isButton() &&
+      interaction.customId.startsWith(
+        "complete_"
+      )
+    ) {
+
+      if (!isStaff(interaction.member)) {
+        return interaction.reply({
+          content:
+            "❌ Hanya MAMIYU STAFF yang dapat menyelesaikan order.",
+          ephemeral: true
+        });
       }
 
-      // ============================
-      // UPDATE TOPIC
-      // ============================
-
-      orderData.status = "COMPLETED";
-      orderData.staffId = interaction.user.id;
-
-      await interaction.channel
-        .setTopic(
-          JSON.stringify(orderData)
-        )
-        .catch(() => {});
-
-      // ============================
-      // LOG COMPLETED
-      // ============================
+      const orderId =
+        interaction.customId.replace(
+          "complete_",
+          ""
+        );
 
       await sendLog(
         interaction.guild,
         "🎉 ORDER COMPLETED",
         `**Order:** ${orderId}\n` +
-        `**Customer:** <@${orderData.customerId || "unknown"}>\n` +
-        `**Roblox:** \`${orderData.username || "-"}\`\n` +
-        `**Product:** ${orderData.amount || "-"} Robux\n` +
-        `**Total:** Rp ${money(orderData.price || 0)}\n` +
-        `**Staff:** <@${interaction.user.id}>\n` +
-        `**Status:** 🎉 COMPLETED`,
+        `**Staff:** <@${interaction.user.id}>\n\n` +
+        `Order telah diselesaikan.`,
         0x00c853
       );
-
-      // ============================
-      // COMPLETED MESSAGE
-      // ============================
 
       await interaction.channel.send({
         embeds: [
           new EmbedBuilder()
-            .setTitle("🎉 PEMBAYARAN TERVERIFIKASI")
+            .setTitle(
+              "🎉 ORDER SELESAI"
+            )
             .setDescription(
-              `Pembayaran untuk **${orderId}** telah diverifikasi oleh staff.\n\n` +
-              `**Staff:** <@${interaction.user.id}>\n\n` +
-              `Status order: **COMPLETED**`
+              `Order **${orderId}** telah selesai.\n\n` +
+              `Diproses oleh <@${interaction.user.id}>.`
             )
             .setColor(0x00c853)
-            .setTimestamp()
         ]
       });
 
-      // ============================
-      // DISABLE VERIFICATION BUTTON
-      // ============================
-
-      const disabledRow =
-        new ActionRowBuilder().addComponents(
-
-          new ButtonBuilder()
-            .setCustomId(
-              `verified_done_${orderId}`
-            )
-            .setLabel("SUDAH DIVERIFIKASI")
-            .setEmoji("✅")
-            .setStyle(ButtonStyle.Success)
-            .setDisabled(true)
-
-        );
-
-      await interaction.update({
-        components: [disabledRow]
+      return interaction.reply({
+        content:
+          "✅ Order berhasil ditandai sebagai selesai.",
+        ephemeral: true
       });
-
-      // ============================
-      // CLOSE AFTER 10 SECONDS
-      // ============================
-
-      setTimeout(async () => {
-
-        await interaction.channel
-          .send(
-            "🔒 Order selesai. Channel akan ditutup dalam 10 detik."
-          )
-          .catch(() => {});
-
-        setTimeout(async () => {
-
-          await interaction.channel
-            .delete(
-              `Order ${orderId} completed`
-            )
-            .catch(() => {});
-
-        }, 10000);
-
-      }, 1000);
-
-      return;
     }
 
-    // ==================================================
-    // STAFF REJECT
-    // ==================================================
+    // ==========================================
+    // REJECT PAYMENT
+    // ==========================================
 
     if (
       interaction.isButton() &&
-      interaction.customId.startsWith("reject_")
+      interaction.customId.startsWith(
+        "reject_"
+      )
     ) {
 
-      if (!staffOnly(interaction.member)) {
+      if (!isStaff(interaction.member)) {
         return interaction.reply({
           content:
-            "❌ Hanya MAMIYU STAFF yang dapat melakukan ini.",
+            "❌ Hanya MAMIYU STAFF yang dapat menolak pembayaran.",
           ephemeral: true
         });
       }
@@ -985,38 +979,41 @@ client.on("interactionCreate", async (interaction) => {
         interaction.guild,
         "❌ PAYMENT REJECTED",
         `**Order:** ${orderId}\n` +
-        `**Staff:** <@${interaction.user.id}>\n` +
-        `**Status:** PAYMENT REJECTED`,
-        0xff1744
+        `**Staff:** <@${interaction.user.id}>\n\n` +
+        `Pembayaran ditolak oleh staff.`,
+        0xff0000
       );
 
       await interaction.channel.send({
         embeds: [
           new EmbedBuilder()
-            .setTitle("❌ PEMBAYARAN DITOLAK")
-            .setDescription(
-              `Pembayaran untuk **${orderId}** belum dapat diverifikasi.\n\n` +
-              `Staff: <@${interaction.user.id}>\n\n` +
-              `Silakan periksa kembali bukti pembayaran ` +
-              `atau hubungi staff.`
+            .setTitle(
+              "❌ PEMBAYARAN DITOLAK"
             )
-            .setColor(0xff1744)
-            .setTimestamp()
+            .setDescription(
+              `Pembayaran untuk **${orderId}** ditolak oleh <@${interaction.user.id}>.\n\n` +
+              "Silakan hubungi staff untuk informasi lebih lanjut."
+            )
+            .setColor(0xff0000)
         ]
       });
 
-      return interaction.update({
-        components: []
+      return interaction.reply({
+        content:
+          "❌ Pembayaran telah ditolak.",
+        ephemeral: true
       });
     }
 
-    // ==================================================
+    // ==========================================
     // CLOSE ORDER
-    // ==================================================
+    // ==========================================
 
     if (
       interaction.isButton() &&
-      interaction.customId.startsWith("close_")
+      interaction.customId.startsWith(
+        "close_"
+      )
     ) {
 
       const orderId =
@@ -1030,14 +1027,19 @@ client.on("interactionCreate", async (interaction) => {
           "🔒 Order akan ditutup dalam 5 detik."
       });
 
-      setTimeout(async () => {
+      await sendLog(
+        interaction.guild,
+        "🔒 ORDER CLOSED",
+        `**Order:** ${orderId}\n` +
+        `**Closed by:** <@${interaction.user.id}>`
+      );
 
+      setTimeout(async () => {
         await interaction.channel
           .delete(
-            `Order ${orderId} cancelled`
+            `Closed order ${orderId}`
           )
           .catch(() => {});
-
       }, 5000);
 
       return;
@@ -1046,8 +1048,13 @@ client.on("interactionCreate", async (interaction) => {
   } catch (error) {
 
     console.error(
-      "INTERACTION ERROR:",
-      error
+      "================ ERROR ================"
+    );
+
+    console.error(error);
+
+    console.error(
+      "========================================"
     );
 
     if (
@@ -1057,75 +1064,22 @@ client.on("interactionCreate", async (interaction) => {
 
       await interaction.reply({
         content:
-          "❌ Terjadi error pada bot. Staff silakan cek log Railway.",
+          "❌ Terjadi error pada bot.\n" +
+          "Staff silakan cek log Railway.",
         ephemeral: true
       }).catch(() => {});
-
     }
   }
 });
 
-// ==================================================
-// SHOW ROBUX MENU
-// ==================================================
-
-async function showAmountMenu(interaction) {
-
-  const prices =
-    config.prices || {};
-
-  const options =
-    Object.entries(prices).map(
-      ([robux, price]) => ({
-        label: `${money(robux)} Robux`,
-        description: `Rp ${money(price)}`,
-        value: String(robux)
-      })
-    );
-
-  if (options.length === 0) {
-    return interaction.reply({
-      content:
-        "❌ Price list belum diatur di config.json.",
-      ephemeral: true
-    });
-  }
-
-  const menu =
-    new StringSelectMenuBuilder()
-      .setCustomId("robux_amount")
-      .setPlaceholder(
-        "Pilih nominal Robux..."
-      )
-      .addOptions(options);
-
-  return interaction.reply({
-    embeds: [
-      new EmbedBuilder()
-        .setTitle("💜 PILIH NOMINAL")
-        .setDescription(
-          "Pilih jumlah Robux yang ingin kamu beli."
-        )
-        .setColor(0x8b2cff)
-    ],
-
-    components: [
-      new ActionRowBuilder()
-        .addComponents(menu)
-    ],
-
-    ephemeral: true
-  });
-}
-
-// ==================================================
+// =========================
 // LOGIN
-// ==================================================
+// =========================
 
 if (!process.env.DISCORD_TOKEN) {
 
   console.error(
-    "❌ DISCORD_TOKEN tidak ditemukan di Railway Variables."
+    "❌ DISCORD_TOKEN tidak ditemukan!"
   );
 
   process.exit(1);
