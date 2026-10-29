@@ -8,54 +8,44 @@ const {
   PermissionFlagsBits
 } = require("discord.js");
 
-const required = [
-  "DISCORD_TOKEN",
-  "CLIENT_ID",
-  "GUILD_ID"
-];
-
-for (const key of required) {
-  if (!process.env[key]) {
-    console.error(`${key} belum diisi di .env`);
-    process.exit(1);
-  }
-}
-
 const commands = [
   new SlashCommandBuilder()
     .setName("setup")
-    .setDescription("Setup server ENTONGSTORE")
+    .setDescription("Membuat struktur server ENTONGSTORE otomatis")
     .setDefaultMemberPermissions(
       PermissionFlagsBits.Administrator
     ),
 
   new SlashCommandBuilder()
     .setName("buy")
-    .setDescription("Mulai order Robux"),
+    .setDescription("Membuka proses order Robux ENTONGSTORE"),
 
   new SlashCommandBuilder()
     .setName("price")
-    .setDescription("Lihat pricelist ENTONGSTORE")
+    .setDescription("Menampilkan daftar harga Robux ENTONGSTORE")
 ].map(command => command.toJSON());
 
-const rest = new REST({ version: "10" })
-  .setToken(process.env.DISCORD_TOKEN);
+async function deployCommands() {
+  const { DISCORD_TOKEN, CLIENT_ID, GUILD_ID } = process.env;
 
-async function deploy() {
-  try {
-    await rest.put(
-      Routes.applicationGuildCommands(
-        process.env.CLIENT_ID,
-        process.env.GUILD_ID
-      ),
-      { body: commands }
+  if (!DISCORD_TOKEN || !CLIENT_ID || !GUILD_ID) {
+    throw new Error(
+      "DISCORD_TOKEN, CLIENT_ID, atau GUILD_ID belum diisi di .env"
     );
-
-    console.log("✅ Slash commands ENTONGSTORE berhasil didaftarkan.");
-  } catch (error) {
-    console.error("❌ Gagal deploy commands:", error);
-    process.exitCode = 1;
   }
+
+  const rest = new REST({ version: "10" })
+    .setToken(DISCORD_TOKEN);
+
+  await rest.put(
+    Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID),
+    { body: commands }
+  );
+
+  console.log("✅ Slash command ENTONGSTORE berhasil didaftarkan!");
 }
 
-deploy();
+deployCommands().catch(error => {
+  console.error("❌ Gagal deploy slash command:", error);
+  process.exitCode = 1;
+});
