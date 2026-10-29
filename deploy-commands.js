@@ -21,34 +21,28 @@ const commands = [
     .setDescription("Menampilkan daftar harga Robux ENTONGSTORE")
 ].map(command => command.toJSON());
 
-async function deployCommands() {
-  const token = process.env.DISCORD_TOKEN;
-  const clientId = process.env.CLIENT_ID;
-  const guildId = process.env.GUILD_ID;
+async function main() {
+  const { DISCORD_TOKEN, CLIENT_ID, GUILD_ID } = process.env;
 
-  if (!token || !clientId || !guildId) {
+  if (!DISCORD_TOKEN || !CLIENT_ID || !GUILD_ID) {
     throw new Error(
-      "DISCORD_TOKEN, CLIENT_ID, dan GUILD_ID wajib diisi di file .env"
+      "Periksa DISCORD_TOKEN, CLIENT_ID, dan GUILD_ID di file .env"
     );
   }
 
-  const rest = new REST({ version: "10" }).setToken(token);
+  const rest = new REST({ version: "10" }).setToken(DISCORD_TOKEN);
 
-  console.log("Sedang mendaftarkan command ENTONGSTORE...");
+  console.log("Deploy command ENTONGSTORE dimulai...");
 
   await rest.put(
-    Routes.applicationGuildCommands(clientId, guildId),
+    Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID),
     { body: commands }
   );
 
-  console.log("==================================");
   console.log("ENTONGSTORE DEPLOY BERHASIL!");
-  console.log("Command: /setup, /buy, /price");
-  console.log("==================================");
 }
 
-deployCommands().catch(error => {
-  console.error("DEPLOY GAGAL!");
-  console.error(error);
+main().catch(error => {
+  console.error("DEPLOY GAGAL:", error);
   process.exitCode = 1;
 });
