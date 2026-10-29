@@ -4,48 +4,58 @@ require("dotenv").config();
 const {
   REST,
   Routes,
-  SlashCommandBuilder
+  SlashCommandBuilder,
+  PermissionFlagsBits
 } = require("discord.js");
 
-const { DISCORD_TOKEN, CLIENT_ID, GUILD_ID } = process.env;
+const required = [
+  "DISCORD_TOKEN",
+  "CLIENT_ID",
+  "GUILD_ID"
+];
 
-if (!DISCORD_TOKEN || !CLIENT_ID || !GUILD_ID) {
-  console.error(
-    "Lengkapi DISCORD_TOKEN, CLIENT_ID, dan GUILD_ID di file .env"
-  );
-  process.exit(1);
+for (const key of required) {
+  if (!process.env[key]) {
+    console.error(`${key} belum diisi di .env`);
+    process.exit(1);
+  }
 }
 
 const commands = [
   new SlashCommandBuilder()
     .setName("setup")
-    .setDescription("Pasang panel pembelian EntongStore"),
+    .setDescription("Setup server ENTONGSTORE")
+    .setDefaultMemberPermissions(
+      PermissionFlagsBits.Administrator
+    ),
 
   new SlashCommandBuilder()
     .setName("buy")
-    .setDescription("Buat tiket pesanan Robux"),
+    .setDescription("Mulai order Robux"),
 
   new SlashCommandBuilder()
     .setName("price")
-    .setDescription("Lihat daftar harga Robux EntongStore")
+    .setDescription("Lihat pricelist ENTONGSTORE")
 ].map(command => command.toJSON());
 
-const rest = new REST({ version: "10" }).setToken(DISCORD_TOKEN);
+const rest = new REST({ version: "10" })
+  .setToken(process.env.DISCORD_TOKEN);
 
-async function main() {
+async function deploy() {
   try {
-    console.log("Mendaftarkan command EntongStore...");
-
     await rest.put(
-      Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID),
+      Routes.applicationGuildCommands(
+        process.env.CLIENT_ID,
+        process.env.GUILD_ID
+      ),
       { body: commands }
     );
 
-    console.log("Slash command berhasil didaftarkan!");
+    console.log("✅ Slash commands ENTONGSTORE berhasil didaftarkan.");
   } catch (error) {
-    console.error("Gagal mendaftarkan command:", error);
+    console.error("❌ Gagal deploy commands:", error);
     process.exitCode = 1;
   }
 }
 
-main();
+deploy();
