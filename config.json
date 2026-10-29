@@ -1,26 +1,24 @@
+
 {
-  "storeName": "EntongStore",
+  "storeName": "ENTONGSTORE",
   "currency": "IDR",
-  "robuxPrices": {
+  "brandColor": "#168BFF",
+  "prices": {
     "100": 17000,
     "500": 70000,
     "1000": 170000,
     "2000": 340000
   },
-  "channels": {
-    "category": "ENTONGSTORE ORDERS",
-    "orderLog": "entongstore-order-logs"
-  },
+  "paymentMethod": "QRIS",
+  "paymentInstructions": "Scan QRIS yang tersedia di channel order. Pastikan nominal pembayaran benar dan kirim bukti transaksi setelah pembayaran berhasil.",
   "roles": {
-    "staff": "ENTONGSTORE STAFF"
+    "staff": ""
   },
-  "payment": {
-    "method": "QRIS",
-    "instructions": [
-      "Scan QRIS yang terlampir menggunakan aplikasi pembayaran yang mendukung QRIS.",
-      "Pastikan nominal pembayaran sesuai total pesanan.",
-      "Setelah membayar, klik tombol **Saya Sudah Bayar** dan kirim bukti pembayaran jika diminta staff.",
-      "Pesanan diproses setelah pembayaran diverifikasi staff."
-    ]
+  "channels": {
+    "info": "",
+    "prices": "",
+    "buy": "",
+    "orderLogs": "",
+    "ordersCategory": ""
   }
 }
