@@ -1,755 +1,1058 @@
+
 require("dotenv").config();
 
-const fs = require("node:fs");
-const path = require("node:path");
+const fs = require("fs");
+const path = require("path");
+
 const {
   Client,
   GatewayIntentBits,
-  Partials,
+  PermissionFlagsBits,
+  ChannelType,
   EmbedBuilder,
   ActionRowBuilder,
   ButtonBuilder,
   ButtonStyle,
   StringSelectMenuBuilder,
-  ChannelType,
-  PermissionFlagsBits,
+  ModalBuilder,
+  TextInputBuilder,
+  TextInputStyle,
   AttachmentBuilder
 } = require("discord.js");
 
 const config = require("./config.json");
-const TOKEN = process.env.DISCORD_TOKEN;
-const QRIS_PATH = path.join(__dirname, "assets", "qris-entongstore.jpg");
-const ORDERS_PATH = path.join(__dirname, "orders.json");
 
-if (!TOKEN) {
-  console.error("DISCORD_TOKEN belum diatur. Isi token bot di file .env.");
-  process.exit(1);
-}
+const QRIS_FILE = path.join(
+  __dirname,
+  "qris-entongstore.jpg"
+);
 
-if (!fs.existsSync(QRIS_PATH)) {
-  console.error("File QRIS tidak ditemukan:", QRIS_PATH);
-  process.exit(1);
-}
+const ORDER_FILE = path.join(__dirname, "orders.json");
 
 const client = new Client({
-  intents: [GatewayIntentBits.Guilds],
-  partials: [Partials.Channel]
+  intents: [
+    GatewayIntentBits.Guilds,
+    GatewayIntentBits.GuildMembers,
+    GatewayIntentBits.GuildMessages,
+    GatewayIntentBits.MessageContent
+  ]
 });
 
-function loadOrders() {
-  try {
-    if (!fs.existsSync(ORDERS_PATH)) {
-      fs.writeFileSync(ORDERS_PATH, "{}");
-    }
+let orders = {};
 
-    return JSON.parse(fs.readFileSync(ORDERS_PATH, "utf8"));
-  } catch (error) {
-    console.error("orders.json tidak bisa dibaca:", error);
-    return {};
+try {
+  if (fs.existsSync(ORDER_FILE)) {
+    orders = JSON.parse(
+      fs.readFileSync(ORDER_FILE, "utf8")
+    );
   }
+} catch (error) {
+  console.error("Gagal membaca orders.json:", error.message);
 }
 
-function saveOrders(orders) {
+function saveOrders() {
   fs.writeFileSync(
-    ORDERS_PATH,
+    ORDER_FILE,
     JSON.stringify(orders, null, 2)
   );
 }
 
-let orders = loadOrders();
-
-const rupiah = value =>
-  new Intl.NumberFormat("id-ID", {
-    style: "currency",
-    currency: "IDR",
-    maximumFractionDigits: 0
-  }).format(value);
-
-function staffRole(guild) {
-  return guild.roles.cache.find(
-    role => role.name === config.roles.staff
-  ) || null;
-}
-
-function isStaff(member) {
-  return Boolean(
-    member?.permissions?.has(PermissionFlagsBits.Administrator) ||
-    member?.roles?.cache?.some(
-      role => role.name === config.roles.staff
-    )
+function rupiah(value) {
+  return new Intl.NumberFormat("id-ID").format(
+    Number(value) || 0
   );
 }
 
-function pricesDescription() {
-  return Object.entries(config.robuxPrices)
-    .map(([amount, price]) =>
-      `• **${Number(amount).toLocaleString("id-ID")} R$** — ${rupiah(price)}`
-    )
-    .join("\n");
+function makeId() {
+  return "ETS-" + Date.now().toString(36).toUpperCase();
 }
 
-function priceEmbed() {
+function makeEmbed(title, description) {
   return new EmbedBuilder()
-    .setColor(0x0788ff)
-    .setTitle(`💎 ${config.storeName} • Daftar Harga Robux`)
-    .setDescription(pricesDescription())
-    .addFields(
-      {
-        name: "💳 Pembayaran",
-        value: "QRIS",
-        inline: true
-      },
-      {
-        name: "🛡️ Proses",
-        value: "Pembayaran diverifikasi staff",
-        inline: true
-      }
-    )
+    .setColor(config.brandColor || "#168BFF")
+    .setTitle(title)
+    .setDescription(description)
     .setFooter({
-      text: `${config.storeName} • Pastikan nominal benar sebelum membayar`
+      text: "ENTONGSTORE • TOP UP GAME"
     })
     .setTimestamp();
 }
 
-function orderEmbed(order) {
-  return new EmbedBuilder()
-    .setColor(
-      order.status === "completed"
-        ? 0x22c55e
-        : order.status === "cancelled"
-          ? 0xef4444
-          : 0x0788ff
+function isStaff(interaction) {
+  if (
+    interaction.memberPermissions?.has(
+      PermissionFlagsBits.Administrator
     )
-    .setTitle(`🧾 Pesanan ${order.id}`)
-    .addFields(
-      {
-        name: "Pembeli",
-        value: `<@${order.userId}>`,
-        inline: true
-      },
-      {
-        name: "Paket",
-        value: `${Number(order.robux).toLocaleString("id-ID")} R$`,
-        inline: true
-      },
-      {
-        name: "Total",
-        value: rupiah(order.price),
-        inline: true
-      },
-      {
-        name: "Metode pembayaran",
-        value: "QRIS",
-        inline: true
-      },
-      {
-        name: "Status",
-        value: order.status,
-        inline: true
-      }
-    )
-    .setTimestamp();
-}
-
-function qrisAttachment() {
-  return new AttachmentBuilder(QRIS_PATH, {
-    name: "qris-entongstore.jpg"
-  });
-}
-
-function paymentRow(orderId) {
-  return new ActionRowBuilder().addComponents(
-    new ButtonBuilder()
-      .setCustomId(`paid:${orderId}`)
-      .setLabel("Saya Sudah Bayar")
-      .setStyle(ButtonStyle.Success)
-      .setEmoji("✅"),
-
-    new ButtonBuilder()
-      .setCustomId(`cancel:${orderId}`)
-      .setLabel("Batalkan Pesanan")
-      .setStyle(ButtonStyle.Danger)
-      .setEmoji("✖️")
-  );
-}
-
-function staffRow(orderId) {
-  return new ActionRowBuilder().addComponents(
-    new ButtonBuilder()
-      .setCustomId(`verify:${orderId}`)
-      .setLabel("Verifikasi & Selesaikan")
-      .setStyle(ButtonStyle.Success),
-
-    new ButtonBuilder()
-      .setCustomId(`staffcancel:${orderId}`)
-      .setLabel("Batalkan")
-      .setStyle(ButtonStyle.Danger)
-  );
-}
-
-async function getOrCreateRole(guild) {
-  let role = staffRole(guild);
-
-  if (!role) {
-    role = await guild.roles.create({
-      name: config.roles.staff,
-      color: 0x0788ff,
-      reason: "Role staff EntongStore"
-    });
+  ) {
+    return true;
   }
 
-  return role;
+  return Boolean(
+    config.roles?.staff &&
+    interaction.member?.roles?.cache?.has(
+      config.roles.staff
+    )
+  );
 }
 
-async function ensureTextChannel(guild, name, options = {}) {
+function statusText(status) {
+  const labels = {
+    WAITING_PAYMENT: "🟡 Menunggu pembayaran",
+    PAYMENT_CHECKING: "🟠 Menunggu verifikasi staff",
+    VERIFIED: "🔵 Pembayaran terverifikasi",
+    PROCESSING: "🟣 Sedang diproses",
+    COMPLETED: "🟢 Selesai",
+    CANCELLED: "⚫ Dibatalkan",
+    REJECTED: "🔴 Pembayaran ditolak"
+  };
+
+  return labels[status] || status;
+}
+
+function orderEmbed(order) {
+  return makeEmbed(
+    `📦 ORDER ${order.id}`,
+    [
+      `**Status:** ${statusText(order.status)}`,
+      `**Pembeli:** <@${order.userId}>`,
+      `**Username Roblox:** ${order.roblox}`,
+      `**Paket:** ${rupiah(order.amount)} Robux`,
+      `**Total:** Rp ${rupiah(order.price)}`,
+      "**Pembayaran:** QRIS",
+      `**Catatan:** ${order.notes || "-"}`,
+      "",
+      "⚠️ Jangan pernah meminta password Roblox."
+    ].join("\n")
+  );
+}
+
+function customerButtons(order) {
+  const row = new ActionRowBuilder();
+
+  if (order.status === "WAITING_PAYMENT") {
+    row.addComponents(
+      new ButtonBuilder()
+        .setCustomId(`ets_paid:${order.id}`)
+        .setLabel("Sudah Bayar")
+        .setEmoji("✅")
+        .setStyle(ButtonStyle.Success),
+
+      new ButtonBuilder()
+        .setCustomId(`ets_cancel:${order.id}`)
+        .setLabel("Batalkan")
+        .setStyle(ButtonStyle.Secondary)
+    );
+  }
+
+  return row.components.length ? [row] : [];
+}
+
+function staffButtons(order) {
+  const row = new ActionRowBuilder();
+
+  if (order.status === "PAYMENT_CHECKING") {
+    row.addComponents(
+      new ButtonBuilder()
+        .setCustomId(`ets_verify:${order.id}`)
+        .setLabel("Verifikasi Pembayaran")
+        .setStyle(ButtonStyle.Success),
+
+      new ButtonBuilder()
+        .setCustomId(`ets_reject:${order.id}`)
+        .setLabel("Tolak Pembayaran")
+        .setStyle(ButtonStyle.Danger)
+    );
+  }
+
+  if (order.status === "VERIFIED") {
+    row.addComponents(
+      new ButtonBuilder()
+        .setCustomId(`ets_process:${order.id}`)
+        .setLabel("Mulai Proses")
+        .setStyle(ButtonStyle.Primary)
+    );
+  }
+
+  if (order.status === "PROCESSING") {
+    row.addComponents(
+      new ButtonBuilder()
+        .setCustomId(`ets_complete:${order.id}`)
+        .setLabel("Selesaikan Order")
+        .setStyle(ButtonStyle.Success)
+    );
+  }
+
+  return row.components.length ? [row] : [];
+}
+
+function allButtons(order) {
+  return [
+    ...customerButtons(order),
+    ...staffButtons(order)
+  ];
+}
+
+function amountRow() {
+  return new ActionRowBuilder().addComponents(
+    new StringSelectMenuBuilder()
+      .setCustomId("ets_amount")
+      .setPlaceholder("Pilih paket Robux")
+      .addOptions(
+        Object.entries(config.prices).map(
+          ([amount, price]) => ({
+            label: `${rupiah(amount)} Robux`,
+            description: `Rp ${rupiah(price)}`,
+            value: amount
+          })
+        )
+      )
+  );
+}
+
+async function fetchChannel(guild, id) {
+  if (!id) return null;
+
+  return guild.channels.fetch(id).catch(() => null);
+}
+
+async function updateOrder(guild, order, actorId) {
+  order.updatedAt = new Date().toISOString();
+  saveOrders();
+
+  // Update pesan utama pada channel order.
+  const orderChannel = await fetchChannel(
+    guild,
+    order.channelId
+  );
+
+  if (orderChannel && order.messageId) {
+    const orderMessage = await orderChannel.messages
+      .fetch(order.messageId)
+      .catch(() => null);
+
+    if (orderMessage) {
+      await orderMessage.edit({
+        embeds: [orderEmbed(order)],
+        components: allButtons(order)
+      }).catch(console.error);
+    }
+  }
+
+  // Satu pesan log per order.
+  const logChannel = await fetchChannel(
+    guild,
+    config.channels?.orderLogs
+  );
+
+  if (!logChannel || !logChannel.isTextBased()) {
+    console.error("Channel order logs tidak ditemukan.");
+    return;
+  }
+
+  const embed = orderEmbed(order).addFields({
+    name: "Perubahan terakhir oleh",
+    value: actorId ? `<@${actorId}>` : "Sistem"
+  });
+
+  let logMessage = null;
+
+  if (order.logMessageId) {
+    logMessage = await logChannel.messages
+      .fetch(order.logMessageId)
+      .catch(() => null);
+  }
+
+  if (logMessage) {
+    await logMessage.edit({
+      embeds: [embed]
+    }).catch(console.error);
+  } else {
+    logMessage = await logChannel.send({
+      embeds: [embed]
+    });
+
+    order.logMessageId = logMessage.id;
+    saveOrders();
+  }
+}
+
+async function createTextChannel(
+  guild,
+  name,
+  parent,
+  overwrites
+) {
   let channel = guild.channels.cache.find(
-    c => c.type === ChannelType.GuildText && c.name === name
+    c =>
+      c.type === ChannelType.GuildText &&
+      c.name === name
   );
 
   if (!channel) {
     channel = await guild.channels.create({
       name,
       type: ChannelType.GuildText,
-      ...options
+      parent: parent.id,
+      permissionOverwrites: overwrites
     });
   }
 
   return channel;
 }
-async function setupStoreServer(guild) {
-  const role = await getOrCreateRole(guild);
+
+async function setupServer(interaction) {
+  await interaction.deferReply({
+    ephemeral: true
+  });
+
+  const guild = interaction.guild;
   const everyone = guild.roles.everyone;
-  const botId = client.user.id;
 
-  const privateOverwrites = [
-    {
-      id: everyone.id,
-      deny: [PermissionFlagsBits.ViewChannel]
-    },
-    {
-      id: role.id,
-      allow: [
-        PermissionFlagsBits.ViewChannel,
-        PermissionFlagsBits.SendMessages,
-        PermissionFlagsBits.ReadMessageHistory
-      ]
-    },
-    {
-      id: botId,
-      allow: [
-        PermissionFlagsBits.ViewChannel,
-        PermissionFlagsBits.SendMessages,
-        PermissionFlagsBits.ReadMessageHistory,
-        PermissionFlagsBits.ManageChannels
-      ]
-    }
-  ];
+  let staffRole = config.roles?.staff
+    ? await guild.roles
+        .fetch(config.roles.staff)
+        .catch(() => null)
+    : null;
 
-  await ensureTextChannel(guild, "informasi");
-  const orderChannel = await ensureTextChannel(guild, "order-robux");
-  await ensureTextChannel(guild, "testimoni");
-
-  const logChannel = await ensureTextChannel(
-    guild,
-    config.channels.orderLog,
-    { permissionOverwrites: privateOverwrites }
-  );
-
-  await ensureTextChannel(
-    guild,
-    "staff-room",
-    { permissionOverwrites: privateOverwrites }
-  );
-
-  let orderCategory = guild.channels.cache.find(
-    c =>
-      c.type === ChannelType.GuildCategory &&
-      c.name === config.channels.category
-  );
-
-  if (!orderCategory) {
-    orderCategory = await guild.channels.create({
-      name: config.channels.category,
-      type: ChannelType.GuildCategory
+  if (!staffRole) {
+    staffRole = await guild.roles.create({
+      name: "ENTONGSTORE STAFF",
+      color: config.brandColor || "#168BFF",
+      reason: "Setup bot ENTONGSTORE"
     });
+
+    config.roles = {
+      ...(config.roles || {}),
+      staff: staffRole.id
+    };
   }
 
-  return {
-    role,
-    orderChannel,
-    logChannel,
-    orderCategory
-  };
-}
-
-async function sendLog(guild, message) {
-  try {
-    const logChannel = guild.channels.cache.find(
-      channel =>
-        channel.type === ChannelType.GuildText &&
-        channel.name === config.channels.orderLog
+  async function getCategory(name, privateCategory = false) {
+    let category = guild.channels.cache.find(
+      c =>
+        c.type === ChannelType.GuildCategory &&
+        c.name === name
     );
 
-    if (!logChannel) {
-      console.error(
-        `Order Logs gagal: channel #${config.channels.orderLog} tidak ditemukan.`
-      );
-      return;
-    }
-
-    await logChannel.send({ content: message });
-
-    console.log(`Order Logs terkirim ke #${logChannel.name}.`);
-  } catch (error) {
-    console.error("Gagal mengirim Order Logs:", error);
-  }
-}
-
-async function createOrder(interaction) {
-  const guild = interaction.guild;
-
-  const existing = Object.values(orders).find(
-    order =>
-      order.guildId === guild.id &&
-      order.userId === interaction.user.id &&
-      !["completed", "cancelled"].includes(order.status)
-  );
-
-  if (existing) {
-    const channel = guild.channels.cache.get(existing.channelId);
-
-    if (channel) {
-      await interaction.reply({
-        content: `Kamu masih memiliki pesanan aktif: ${channel}`,
-        ephemeral: true
+    if (!category) {
+      category = await guild.channels.create({
+        name,
+        type: ChannelType.GuildCategory,
+        ...(privateCategory
+          ? {
+              permissionOverwrites: [
+                {
+                  id: everyone.id,
+                  deny: [
+                    PermissionFlagsBits.ViewChannel
+                  ]
+                },
+                {
+                  id: staffRole.id,
+                  allow: [
+                    PermissionFlagsBits.ViewChannel,
+                    PermissionFlagsBits.ReadMessageHistory
+                  ]
+                }
+              ]
+            }
+          : {})
       });
-      return;
     }
 
-    existing.status = "cancelled";
-    saveOrders(orders);
+    return category;
   }
 
-  let category = guild.channels.cache.find(
-    channel =>
-      channel.type === ChannelType.GuildCategory &&
-      channel.name === config.channels.category
+  const infoCategory = await getCategory("INFORMASI");
+  const storeCategory = await getCategory("ENTONGSTORE");
+  const orderCategory = await getCategory(
+    "ENTONGSTORE ORDERS"
+  );
+  const staffCategory = await getCategory(
+    "STAFF",
+    true
   );
 
-  if (!category) {
-    category = await guild.channels.create({
-      name: config.channels.category,
-      type: ChannelType.GuildCategory
-    });
-  }
+  const everyonePublic = {
+    id: everyone.id,
+    allow: [
+      PermissionFlagsBits.ViewChannel,
+      PermissionFlagsBits.ReadMessageHistory
+    ],
+    deny: [
+      PermissionFlagsBits.SendMessages
+    ]
+  };
 
-  const role = await getOrCreateRole(guild);
+  const botPermissions = {
+    id: client.user.id,
+    allow: [
+      PermissionFlagsBits.ViewChannel,
+      PermissionFlagsBits.SendMessages,
+      PermissionFlagsBits.EmbedLinks,
+      PermissionFlagsBits.ReadMessageHistory,
+      PermissionFlagsBits.AttachFiles,
+      PermissionFlagsBits.ManageChannels
+    ]
+  };
 
-  const channelName = `order-${interaction.user.username}`
-    .toLowerCase()
-    .replace(/[^a-z0-9-]/g, "")
-    .slice(0, 80);
+  const publicPermissions = [
+    everyonePublic,
+    botPermissions
+  ];
 
-  const channel = await guild.channels.create({
-    name: channelName || `order-${interaction.user.id}`,
-    type: ChannelType.GuildText,
-    parent: category.id,
-    permissionOverwrites: [
+  const infoChannel = await createTextChannel(
+    guild,
+    "informasi",
+    infoCategory,
+    publicPermissions
+  );
+
+  const priceChannel = await createTextChannel(
+    guild,
+    "pricelist-robux",
+    infoCategory,
+    publicPermissions
+  );
+
+  const buyChannel = await createTextChannel(
+    guild,
+    "buy-robux",
+    storeCategory,
+    publicPermissions
+  );
+
+  const logsChannel = await createTextChannel(
+    guild,
+    "order-logs",
+    staffCategory,
+    [
       {
-        id: guild.roles.everyone.id,
-        deny: [PermissionFlagsBits.ViewChannel]
-      },
-      {
-        id: interaction.user.id,
-        allow: [
-          PermissionFlagsBits.ViewChannel,
-          PermissionFlagsBits.SendMessages,
-          PermissionFlagsBits.ReadMessageHistory,
-          PermissionFlagsBits.AttachFiles
+        id: everyone.id,
+        deny: [
+          PermissionFlagsBits.ViewChannel
         ]
       },
       {
-        id: role.id,
+        id: staffRole.id,
         allow: [
           PermissionFlagsBits.ViewChannel,
           PermissionFlagsBits.SendMessages,
           PermissionFlagsBits.ReadMessageHistory
         ]
       },
-      {
-        id: client.user.id,
-        allow: [
-          PermissionFlagsBits.ViewChannel,
-          PermissionFlagsBits.SendMessages,
-          PermissionFlagsBits.ReadMessageHistory,
-          PermissionFlagsBits.AttachFiles,
-          PermissionFlagsBits.ManageChannels
-        ]
-      }
+      botPermissions
     ]
-  });
+  );
 
-  const id = `${Date.now().toString(36)}-${interaction.user.id.slice(-4)}`;
-
-  const order = {
-    id,
-    guildId: guild.id,
-    channelId: channel.id,
-    userId: interaction.user.id,
-    robux: null,
-    price: null,
-    status: "choosing_package",
-    createdAt: new Date().toISOString()
+  config.channels = {
+    info: infoChannel.id,
+    prices: priceChannel.id,
+    buy: buyChannel.id,
+    orderLogs: logsChannel.id,
+    ordersCategory: orderCategory.id
   };
 
-  orders[id] = order;
-  saveOrders(orders);
+  fs.writeFileSync(
+    path.join(__dirname, "config.json"),
+    JSON.stringify(config, null, 2)
+  );
 
-  const select = new StringSelectMenuBuilder()
-    .setCustomId(`package:${id}`)
-    .setPlaceholder("Pilih paket Robux")
-    .addOptions(
-      Object.entries(config.robuxPrices).map(([amount, price]) => ({
-        label: `${Number(amount).toLocaleString("id-ID")} Robux`,
-        description: rupiah(price),
-        value: amount
-      }))
-    );
+  const priceList = Object.entries(config.prices)
+    .map(
+      ([amount, price]) =>
+        `> 💎 **${rupiah(amount)} Robux** — Rp ${rupiah(price)}`
+    )
+    .join("\n");
 
-  await channel.send({
-    content:
-      `<@${interaction.user.id}> selamat datang di **${config.storeName}**!\n` +
-      "Pilih paket Robux pada menu di bawah. Staff tidak akan meminta password akunmu.",
-    embeds: [priceEmbed()],
-    components: [
-      new ActionRowBuilder().addComponents(select)
-    ]
+  const infoEmbed = makeEmbed(
+    "❄️ SELAMAT DATANG DI ENTONGSTORE",
+    [
+      "⚡ TOP UP • GAME • ROBUX",
+      "",
+      "🛒 Pilih paket melalui BUY ROBUX.",
+      "💳 Pembayaran hanya menggunakan QRIS.",
+      "🛡️ Pembayaran diverifikasi staff secara manual.",
+      "🔐 Jangan pernah membagikan password Roblox."
+    ].join("\n")
+  );
+
+  const pricesEmbed = makeEmbed(
+    "💎 PRICELIST ROBUX",
+    priceList
+  );
+
+  const panelEmbed = makeEmbed(
+    "🛒 ENTONGSTORE | BUY ROBUX",
+    [
+      "Selamat datang di layanan order ENTONGSTORE!",
+      "",
+      "1️⃣ Tekan tombol BUY ROBUX.",
+      "2️⃣ Pilih paket Robux.",
+      "3️⃣ Isi username Roblox.",
+      "4️⃣ Scan QRIS di channel order privat.",
+      "5️⃣ Kirim bukti pembayaran.",
+      "6️⃣ Tunggu verifikasi staff.",
+      "",
+      "⚠️ Pastikan nominal pembayaran benar.",
+      "Pembayaran hanya dianggap sah setelah diperiksa staff."
+    ].join("\n")
+  );
+
+  await infoChannel.send({
+    embeds: [infoEmbed]
   });
 
-  await interaction.reply({
-    content: `Tiket pesanan kamu sudah dibuat: ${channel}`,
-    ephemeral: true
+  await priceChannel.send({
+    embeds: [pricesEmbed]
+  });
+
+  const recentMessages = await buyChannel.messages.fetch({
+    limit: 50
+  });
+
+  const panelExists = recentMessages.some(
+    message =>
+      message.author.id === client.user.id &&
+      message.embeds.some(
+        embed =>
+          embed.title === "ENTONGSTORE | BUY ROBUX"
+      )
+  );
+
+  if (!panelExists) {
+    await buyChannel.send({
+      embeds: [panelEmbed],
+      components: [
+        new ActionRowBuilder().addComponents(
+          new ButtonBuilder()
+            .setCustomId("ets_buy")
+            .setLabel("BUY ROBUX")
+            .setEmoji("🛒")
+            .setStyle(ButtonStyle.Primary)
+        )
+      ]
+    });
+  }
+
+  await interaction.editReply({
+    content: [
+      "✅ **Setup ENTONGSTORE berhasil!**",
+      `📢 Panel: <#${buyChannel.id}>`,
+      `💎 Pricelist: <#${priceChannel.id}>`,
+      `📋 Order logs: <#${logsChannel.id}>`,
+      `🛡️ Role staff: <@&${staffRole.id}>`
+    ].join("\n")
   });
 }
 
-client.once("ready", () => {
-  console.log(`Bot ${client.user.tag} aktif untuk ${config.storeName}.`);
-});
 client.on("interactionCreate", async interaction => {
   try {
+    if (!interaction.guild) return;
+
+    // Slash commands.
     if (interaction.isChatInputCommand()) {
-      if (interaction.commandName === "price") {
-        await interaction.reply({
-          embeds: [priceEmbed()],
-          ephemeral: true
-        });
-        return;
-      }
-
-      if (interaction.commandName === "buy") {
-        await createOrder(interaction);
-        return;
-      }
-
       if (interaction.commandName === "setup") {
         if (
           !interaction.memberPermissions?.has(
             PermissionFlagsBits.Administrator
           )
         ) {
-          await interaction.reply({
-            content: "Command ini hanya untuk administrator.",
+          return interaction.reply({
+            content: "Khusus administrator.",
             ephemeral: true
           });
-          return;
         }
 
-        await interaction.deferReply({ ephemeral: true });
+        return setupServer(interaction);
+      }
 
-        const setup = await setupStoreServer(interaction.guild);
+      if (interaction.commandName === "price") {
+        const list = Object.entries(config.prices)
+          .map(
+            ([amount, price]) =>
+              `💎 **${rupiah(amount)} Robux** — Rp ${rupiah(price)}`
+          )
+          .join("\n");
 
-        const row = new ActionRowBuilder().addComponents(
-          new ButtonBuilder()
-            .setCustomId("buy:start")
-            .setLabel("Buat Pesanan")
-            .setStyle(ButtonStyle.Primary)
-            .setEmoji("🛒")
-        );
-
-        await setup.orderChannel.send({
+        return interaction.reply({
           embeds: [
-            new EmbedBuilder()
-              .setColor(0x0788ff)
-              .setTitle(`💎 ${config.storeName} • Top Up Robux`)
-              .setDescription(
-                `Selamat datang di **${config.storeName}**!\n\n` +
-                `${pricesDescription()}\n\n` +
-                "**Pembayaran hanya melalui QRIS.** " +
-                "Klik tombol di bawah untuk membuat tiket pesanan."
-              )
-              .setImage("attachment://qris-entongstore.jpg")
-              .setFooter({
-                text: "Jangan membagikan password akun kepada siapa pun."
-              })
+            makeEmbed("💎 PRICELIST ENTONGSTORE", list)
           ],
-          files: [qrisAttachment()],
-          components: [row]
-        });
-
-        await interaction.editReply({
-          content:
-            `Setup selesai! Channel toko dibuat/diperiksa, ` +
-            `role **${setup.role.name}** tersedia, dan panel order ` +
-            `dipasang di ${setup.orderChannel}. ` +
-            `Order log berada di ${setup.logChannel}.`
+          ephemeral: true
         });
       }
 
-      return;
+      if (interaction.commandName === "buy") {
+        return interaction.reply({
+          content: "Silakan pilih paket Robux:",
+          components: [amountRow()],
+          ephemeral: true
+        });
+      }
     }
 
+    // Tombol panel BUY ROBUX.
     if (
       interaction.isButton() &&
-      interaction.customId === "buy:start"
+      interaction.customId === "ets_buy"
     ) {
-      await createOrder(interaction);
-      return;
+      return interaction.reply({
+        content: "Silakan pilih paket Robux:",
+        components: [amountRow()],
+        ephemeral: true
+      });
     }
 
+    // Pemilihan paket.
     if (
       interaction.isStringSelectMenu() &&
-      interaction.customId.startsWith("package:")
+      interaction.customId === "ets_amount"
     ) {
-      const id = interaction.customId.split(":")[1];
-      const order = orders[id];
-
-      if (!order || order.userId !== interaction.user.id) {
-        await interaction.reply({
-          content: "Pesanan tidak ditemukan atau bukan milikmu.",
-          ephemeral: true
-        });
-        return;
-      }
-
-      if (order.status !== "choosing_package") {
-        await interaction.reply({
-          content: "Paket pesanan ini sudah dipilih sebelumnya.",
-          ephemeral: true
-        });
-        return;
-      }
-
       const amount = interaction.values[0];
 
-      order.robux = Number(amount);
-      order.price = config.robuxPrices[amount];
-      order.status = "awaiting_payment";
-
-      saveOrders(orders);
-
-      const embed = new EmbedBuilder()
-        .setColor(0x0788ff)
-        .setTitle(`💳 Pembayaran QRIS • ${config.storeName}`)
-        .setDescription(
-          `Pesanan: **${Number(amount).toLocaleString("id-ID")} R$**\n` +
-          `Total: **${rupiah(order.price)}**\n\n` +
-          config.payment.instructions
-            .map((line, i) => `${i + 1}. ${line}`)
-            .join("\n")
-        )
-        .setImage("attachment://qris-entongstore.jpg")
-        .setFooter({
-          text: "QRIS pada gambar harus diverifikasi sebelum pesanan diproses."
+      if (!Object.hasOwn(config.prices, amount)) {
+        return interaction.reply({
+          content: "Paket tidak valid.",
+          ephemeral: true
         });
+      }
 
-      await interaction.update({
-        content: "Paket dipilih. Ikuti instruksi pembayaran di bawah.",
-        components: []
-      });
+      const modal = new ModalBuilder()
+        .setCustomId(`ets_order:${amount}`)
+        .setTitle("ENTONGSTORE • Order");
 
-      await interaction.channel.send({
-        embeds: [embed],
-        files: [qrisAttachment()],
-        components: [paymentRow(id)]
-      });
+      modal.addComponents(
+        new ActionRowBuilder().addComponents(
+          new TextInputBuilder()
+            .setCustomId("roblox")
+            .setLabel("Username Roblox")
+            .setPlaceholder("Username saja, jangan password")
+            .setStyle(TextInputStyle.Short)
+            .setRequired(true)
+            .setMaxLength(30)
+        ),
+        new ActionRowBuilder().addComponents(
+          new TextInputBuilder()
+            .setCustomId("notes")
+            .setLabel("Catatan (opsional)")
+            .setPlaceholder("Catatan tambahan untuk staff")
+            .setStyle(TextInputStyle.Paragraph)
+            .setRequired(false)
+            .setMaxLength(300)
+        )
+      );
 
-      await sendLog(
+      return interaction.showModal(modal);
+    }
+
+    // Membuat order baru.
+    if (
+      interaction.isModalSubmit() &&
+      interaction.customId.startsWith("ets_order:")
+    ) {
+      const amount = interaction.customId.split(":")[1];
+      const price = config.prices[amount];
+
+      if (!price) {
+        return interaction.reply({
+          content: "Paket tidak valid.",
+          ephemeral: true
+        });
+      }
+
+      const activeOrder = Object.values(orders).find(
+        order =>
+          order.userId === interaction.user.id &&
+          ![
+            "COMPLETED",
+            "CANCELLED",
+            "REJECTED"
+          ].includes(order.status)
+      );
+
+      if (activeOrder) {
+        return interaction.reply({
+          content:
+            `Kamu masih memiliki order aktif: ` +
+            `<#${activeOrder.channelId}>`,
+          ephemeral: true
+        });
+      }
+
+      const category = await fetchChannel(
         interaction.guild,
-        `🆕 Pesanan ${id} dibuat oleh ${interaction.user.tag}: ` +
-        `${amount} R$ — ${rupiah(order.price)} — <#${order.channelId}>`
+        config.channels?.ordersCategory
+      );
+
+      if (!category) {
+        return interaction.reply({
+          content: "Jalankan /setup terlebih dahulu.",
+          ephemeral: true
+        });
+      }
+
+      if (!fs.existsSync(QRIS_FILE)) {
+        return interaction.reply({
+          content:
+            "File qris-entongstore.jpg tidak ditemukan. " +
+            "Unggah file tersebut ke folder utama repository.",
+          ephemeral: true
+        });
+      }
+
+      await interaction.deferReply({
+        ephemeral: true
+      });
+
+      const order = {
+        id: makeId(),
+        userId: interaction.user.id,
+        roblox: interaction.fields
+          .getTextInputValue("roblox")
+          .trim(),
+        notes:
+          interaction.fields.getTextInputValue("notes") || "-",
+        amount: Number(amount),
+        price: Number(price),
+        status: "WAITING_PAYMENT",
+        channelId: null,
+        messageId: null,
+        logMessageId: null,
+        createdAt: new Date().toISOString()
+      };
+
+      const safeUsername = interaction.user.username
+        .toLowerCase()
+        .replace(/[^a-z0-9-]/g, "")
+        .slice(0, 12) || "pembeli";
+
+      const channel = await interaction.guild.channels.create({
+        name:
+          `order-${safeUsername}-` +
+          order.id.slice(-5).toLowerCase(),
+        type: ChannelType.GuildText,
+        parent: category.id,
+        permissionOverwrites: [
+          {
+            id: interaction.guild.roles.everyone.id,
+            deny: [
+              PermissionFlagsBits.ViewChannel
+            ]
+          },
+          {
+            id: order.userId,
+            allow: [
+              PermissionFlagsBits.ViewChannel,
+              PermissionFlagsBits.SendMessages,
+              PermissionFlagsBits.AttachFiles,
+              PermissionFlagsBits.ReadMessageHistory
+            ]
+          },
+          {
+            id: config.roles.staff,
+            allow: [
+              PermissionFlagsBits.ViewChannel,
+              PermissionFlagsBits.SendMessages,
+              PermissionFlagsBits.AttachFiles,
+              PermissionFlagsBits.ReadMessageHistory
+            ]
+          },
+          {
+            id: client.user.id,
+            allow: [
+              PermissionFlagsBits.ViewChannel,
+              PermissionFlagsBits.SendMessages,
+              PermissionFlagsBits.AttachFiles,
+              PermissionFlagsBits.EmbedLinks,
+              PermissionFlagsBits.ReadMessageHistory,
+              PermissionFlagsBits.ManageChannels
+            ]
+          }
+        ]
+      });
+
+      order.channelId = channel.id;
+      orders[order.id] = order;
+      saveOrders();
+
+      const qrEmbed = orderEmbed(order)
+        .setDescription(
+          [
+            `**ID Order:** ${order.id}`,
+            `**Paket:** ${rupiah(order.amount)} Robux`,
+            `**Total pembayaran:** Rp ${rupiah(order.price)}`,
+            `**Username Roblox:** ${order.roblox}`,
+            "",
+            "## 💳 PEMBAYARAN QRIS",
+            config.paymentInstructions ||
+              "Scan QRIS dan bayar sesuai nominal.",
+            "",
+            "1. Scan QRIS di bawah.",
+            "2. Periksa nominal sebelum membayar.",
+            "3. Kirim foto bukti transaksi di channel ini.",
+            "4. Tekan tombol **Sudah Bayar**.",
+            "",
+            "Pembayaran harus diverifikasi staff secara manual."
+          ].join("\n")
+        )
+        .setImage("attachment://qris-entongstore.jpg");
+
+      const message = await channel.send({
+        content: `<@${order.userId}>`,
+        embeds: [qrEmbed],
+        files: [
+          new AttachmentBuilder(QRIS_FILE, {
+            name: "qris-entongstore.jpg"
+          })
+        ],
+        components: allButtons(order)
+      });
+
+      order.messageId = message.id;
+      saveOrders();
+
+      await updateOrder(
+        interaction.guild,
+        order,
+        interaction.user.id
+      );
+
+      return interaction.editReply({
+        content:
+          `✅ Order berhasil dibuat!\n` +
+          `ID: **${order.id}**\n` +
+          `Channel: <#${channel.id}>`
+      });
+    }
+
+    if (!interaction.isButton()) return;
+
+    const [action, id] = interaction.customId.split(":");
+
+    if (!action.startsWith("ets_") || !id) return;
+
+    const order = orders[id];
+
+    if (!order) {
+      return interaction.reply({
+        content: "Order tidak ditemukan.",
+        ephemeral: true
+      });
+    }
+
+    if (order.channelId !== interaction.channelId) {
+      return interaction.reply({
+        content: "Tombol ini bukan untuk channel order tersebut.",
+        ephemeral: true
+      });
+    }
+
+    // Pembeli memberi tahu bahwa pembayaran sudah dilakukan.
+    if (action === "ets_paid") {
+      if (interaction.user.id !== order.userId) {
+        return interaction.reply({
+          content: "Hanya pemilik order yang dapat melakukan ini.",
+          ephemeral: true
+        });
+      }
+
+      if (order.status !== "WAITING_PAYMENT") {
+        return interaction.reply({
+          content: "Status pembayaran sudah berubah.",
+          ephemeral: true
+        });
+      }
+
+      order.status = "PAYMENT_CHECKING";
+
+      await interaction.reply({
+        content:
+          "Bukti pembayaran sedang menunggu pemeriksaan staff.",
+        ephemeral: true
+      });
+
+      await updateOrder(
+        interaction.guild,
+        order,
+        interaction.user.id
+      );
+
+      if (config.roles?.staff) {
+        await interaction.channel.send(
+          `🔔 <@&${config.roles.staff}> ` +
+          `Periksa pembayaran order **${order.id}**.`
+        );
+      }
+
+      return;
+    }
+
+    // Membatalkan order.
+    if (action === "ets_cancel") {
+      if (
+        interaction.user.id !== order.userId &&
+        !isStaff(interaction)
+      ) {
+        return interaction.reply({
+          content: "Kamu tidak memiliki akses.",
+          ephemeral: true
+        });
+      }
+
+      if (
+        !["WAITING_PAYMENT", "PAYMENT_CHECKING"].includes(
+          order.status
+        )
+      ) {
+        return interaction.reply({
+          content: "Order tidak bisa dibatalkan pada status ini.",
+          ephemeral: true
+        });
+      }
+
+      order.status = "CANCELLED";
+
+      await interaction.reply({
+        content: "Order berhasil dibatalkan.",
+        ephemeral: true
+      });
+
+      await updateOrder(
+        interaction.guild,
+        order,
+        interaction.user.id
       );
 
       return;
     }
 
-    if (interaction.isButton()) {
-      const [action, id] = interaction.customId.split(":");
+    // Aksi yang hanya boleh dilakukan staff.
+    const staffActions = {
+      ets_verify: ["PAYMENT_CHECKING", "VERIFIED"],
+      ets_reject: ["PAYMENT_CHECKING", "REJECTED"],
+      ets_process: ["VERIFIED", "PROCESSING"],
+      ets_complete: ["PROCESSING", "COMPLETED"]
+    };
 
-      if (
-        !id ||
-        !["paid", "cancel", "verify", "staffcancel"].includes(action)
-      ) {
-        return;
-      }
-
-      const order = orders[id];
-
-      if (!order) {
-        await interaction.reply({
-          content: "Data pesanan tidak ditemukan.",
+    if (staffActions[action]) {
+      if (!isStaff(interaction)) {
+        return interaction.reply({
+          content: "Khusus staff ENTONGSTORE.",
           ephemeral: true
         });
-        return;
       }
 
-      if (action === "paid") {
-        if (interaction.user.id !== order.userId) {
-          await interaction.reply({
-            content: "Hanya pembeli yang dapat menandai pembayaran.",
-            ephemeral: true
-          });
-          return;
-        }
+      const [expectedStatus, nextStatus] =
+        staffActions[action];
 
-        if (order.status !== "awaiting_payment") {
-          await interaction.reply({
-            content: "Status pesanan sudah berubah.",
-            ephemeral: true
-          });
-          return;
-        }
-
-        order.status = "payment_claimed";
-        order.paymentClaimedAt = new Date().toISOString();
-
-        saveOrders(orders);
-
-        await interaction.update({ components: [] });
-
-        await interaction.channel.send({
-          content:
-            `🔔 <@&${staffRole(interaction.guild)?.id || ""}> ` +
-            `Pembeli <@${order.userId}> menyatakan sudah membayar ` +
-            `pesanan **${rupiah(order.price)}**. ` +
-            "Periksa transaksi QRIS secara manual sebelum menyelesaikan pesanan.",
-          embeds: [orderEmbed(order)],
-          components: [staffRow(id)]
-        });
-
-        await sendLog(
-          interaction.guild,
-          `🔔 Pembayaran diklaim untuk pesanan ${id}; perlu verifikasi manual.`
-        );
-
-        return;
-      }
-
-      if (!isStaff(interaction.member)) {
-        await interaction.reply({
-          content: "Tombol ini hanya untuk staff EntongStore atau administrator.",
+      if (order.status !== expectedStatus) {
+        return interaction.reply({
+          content: "Status order sudah berubah.",
           ephemeral: true
         });
-        return;
       }
 
-      if (["completed", "cancelled"].includes(order.status)) {
-        await interaction.reply({
-          content: "Pesanan ini sudah ditutup.",
-          ephemeral: true
-        });
-        return;
-      }
-
-      if (action === "verify") {
-        if (order.status !== "payment_claimed") {
-          await interaction.reply({
-            content:
-              "Pembeli belum menandai pembayaran. Verifikasi hanya setelah memeriksa transaksi.",
-            ephemeral: true
-          });
-          return;
-        }
-
-        order.status = "completed";
-        order.completedAt = new Date().toISOString();
+      if (action === "ets_verify") {
         order.verifiedBy = interaction.user.id;
-
-        saveOrders(orders);
-
-        await interaction.update({
-          embeds: [orderEmbed(order)],
-          components: []
-        });
-
-        await interaction.channel.send(
-          `✅ Pembayaran pesanan **${order.id}** telah diverifikasi oleh ` +
-          `${interaction.user}. Staff dapat melanjutkan pengiriman Robux.`
-        );
-
-        await sendLog(
-          interaction.guild,
-          `✅ Pesanan ${id} diselesaikan oleh ${interaction.user.tag}.`
-        );
-
-        return;
+        order.verifiedAt = new Date().toISOString();
       }
 
-      if (
-        action === "cancel" &&
-        interaction.user.id !== order.userId
-      ) {
-        await interaction.reply({
-          content: "Hanya pembeli yang dapat membatalkan pesanan ini.",
-          ephemeral: true
-        });
-        return;
-      }
+      order.status = nextStatus;
 
-      if (
-        action === "staffcancel" &&
-        !isStaff(interaction.member)
-      ) {
-        await interaction.reply({
-          content: "Hanya staff yang dapat membatalkan pesanan ini.",
-          ephemeral: true
-        });
-        return;
-      }
+      await interaction.reply({
+        content: `Status diperbarui: ${statusText(nextStatus)}`,
+        ephemeral: true
+      });
 
-      order.status = "cancelled";
-      order.cancelledAt = new Date().toISOString();
-
-      saveOrders(orders);
-
-      await interaction.update({ components: [] });
-
-      await interaction.channel.send(
-        `❌ Pesanan **${id}** dibatalkan oleh ${interaction.user}.`
-      );
-
-      await sendLog(
+      await updateOrder(
         interaction.guild,
-        `❌ Pesanan ${id} dibatalkan oleh ${interaction.user.tag}.`
+        order,
+        interaction.user.id
       );
+
+      return;
     }
   } catch (error) {
-    console.error("Kesalahan interaction:", error);
-
-    const response = {
-      content: "Terjadi kesalahan saat memproses permintaan. Cek log bot.",
-      ephemeral: true
-    };
+    console.error("Interaction error:", error);
 
     if (
       interaction.isRepliable() &&
       !interaction.replied &&
       !interaction.deferred
     ) {
-      await interaction.reply(response).catch(() => {});
-    } else if (interaction.isRepliable()) {
-      await interaction.followUp(response).catch(() => {});
+      await interaction.reply({
+        content:
+          "Terjadi kesalahan. Periksa log hosting untuk detailnya.",
+        ephemeral: true
+      }).catch(() => {});
     }
   }
 });
 
-client.login(TOKEN);
+// Otomatis mendeteksi bukti transaksi berupa lampiran.
+client.on("messageCreate", async message => {
+  if (!message.guild || message.author.bot) return;
+
+  const order = Object.values(orders).find(
+    item => item.channelId === message.channel.id
+  );
+
+  if (!order || message.author.id !== order.userId) return;
+  if (!message.attachments.size) return;
+
+  if (
+    !["WAITING_PAYMENT", "PAYMENT_CHECKING"].includes(
+      order.status
+    )
+  ) {
+    return;
+  }
+
+  if (order.status === "WAITING_PAYMENT") {
+    order.status = "PAYMENT_CHECKING";
+  }
+
+  await updateOrder(
+    message.guild,
+    order,
+    message.author.id
+  );
+
+  await message.channel.send(
+    `📎 Lampiran bukti transaksi diterima untuk **${order.id}**. ` +
+    "Staff harus memeriksa transaksi asli sebelum memverifikasi."
+  );
+
+  if (config.roles?.staff) {
+    await message.channel.send(
+      `🔔 <@&${config.roles.staff}> ` +
+      `Silakan periksa order **${order.id}**.`
+    );
+  }
+});
+
+client.once("ready", () => {
+  console.log(
+    `✅ ${config.storeName} online sebagai ${client.user.tag}`
+  );
+
+  client.user.setActivity(
+    "ENTONGSTORE | BUY ROBUX"
+  );
+});
+
+client.on("error", error => {
+  console.error("Discord client error:", error);
+});
+
+process.on("unhandledRejection", error => {
+  console.error("Unhandled rejection:", error);
+});
+
+if (!process.env.DISCORD_TOKEN) {
+  console.error("DISCORD_TOKEN belum diisi di .env");
+  process.exit(1);
+}
+
+client.login(process.env.DISCORD_TOKEN);
