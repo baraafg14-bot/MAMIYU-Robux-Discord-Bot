@@ -1,20 +1,16 @@
+
 require("dotenv").config();
 
 const {
   REST,
   Routes,
-  SlashCommandBuilder,
-  PermissionFlagsBits
+  SlashCommandBuilder
 } = require("discord.js");
 
-// Daftar slash command ENTONGSTORE
 const commands = [
   new SlashCommandBuilder()
     .setName("setup")
-    .setDescription("Membuat struktur server ENTONGSTORE otomatis")
-    .setDefaultMemberPermissions(
-      PermissionFlagsBits.Administrator
-    ),
+    .setDescription("Membuat struktur server ENTONGSTORE otomatis"),
 
   new SlashCommandBuilder()
     .setName("buy")
@@ -31,31 +27,26 @@ async function main() {
   const guildId = process.env.GUILD_ID;
 
   if (!token || !clientId || !guildId) {
-    console.error(
-      "ERROR: Periksa DISCORD_TOKEN, CLIENT_ID, dan GUILD_ID di file .env"
+    throw new Error(
+      "DISCORD_TOKEN, CLIENT_ID, atau GUILD_ID belum diisi di .env"
     );
-    process.exitCode = 1;
-    return;
   }
 
   const rest = new REST({ version: "10" })
     .setToken(token);
 
-  console.log("Mengirim slash command ENTONGSTORE...");
+  console.log("Memulai deploy command ENTONGSTORE...");
 
   await rest.put(
     Routes.applicationGuildCommands(clientId, guildId),
     { body: commands }
   );
 
-  console.log("====================================");
   console.log("ENTONGSTORE: DEPLOY BERHASIL!");
   console.log("Command tersedia: /setup, /buy, /price");
-  console.log("====================================");
 }
 
 main().catch(error => {
-  console.error("DEPLOY GAGAL:");
-  console.error(error);
+  console.error("Deploy gagal:", error.message);
   process.exitCode = 1;
 });
